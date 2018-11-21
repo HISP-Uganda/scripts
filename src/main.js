@@ -5,7 +5,7 @@ const rq = require('request-promise');
 const _ = require('lodash');
 const minimist = require('minimist');
 const fs = require("fs");
-const db = require('odbc')();
+// const db = require('odbc')();
 const url = require('url').URL;
 const isReachable = require('is-reachable');
 const winston = require('./winston');
@@ -16,6 +16,7 @@ const args = minimist(process.argv.slice(2));
 const username = args['dhis2-username'] || 'admin';
 const password = args['dhis2-password'] || 'district';
 const dhisUrl = args['dhis2-url'] || 'http://localhost:8080/dhis';
+const schedule = args['schedule'];
 
 const dhis2 = new url(dhisUrl);
 
@@ -410,10 +411,7 @@ const processData = (mapping, data, foundEntities) => {
                         event: stage.eventDateIdentifiesEvent
                     };
                     // Coordinates
-                    let coordinate = {
-                        latitude: null,
-                        longitude: null
-                    };
+                    let coordinate = null;
                     if (stage.latitudeColumn && stage.longitudeColumn) {
                         coordinate = {
                             latitude: d[stage.latitudeColumn.value],
@@ -452,10 +450,12 @@ const processData = (mapping, data, foundEntities) => {
                             dataValues,
                             eventDate,
                             programStage: stage.id,
-                            program: mapping.id,
-                            coordinate
-
+                            program: mapping.id
                         };
+
+                        if (coordinate) {
+                            event = {...event, coordinate}
+                        }
 
                         if (stage.completeEvents) {
                             event = {
@@ -790,7 +790,7 @@ const pullMapping = async (args, minimum) => {
                             data = await readMysql(args.s, sql, [minimum, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]);
 
                         } else {
-                            winston.log('error', 'Mysql query file not specified');
+                            winston.log('error', 'Mysql query file not found');
                         }
                         break;
                     case 'excel':
@@ -870,25 +870,38 @@ const pullMapping = async (args, minimum) => {
             const allInstances = [...newTrackedEntityInstances, ...trackedEntityInstancesUpdate];
             const allEvents = [...newEvents, ...eventsUpdate];
 
-            const instancesInserts = _.chunk(allInstances, 50).map(trackedEntityInstances => {
-                return insertTrackedEntityInstance({trackedEntityInstances});
-            });
+            try {
+                if (allInstances.length > 0) {
+                    const instancesResults = await insertTrackedEntityInstance({trackedEntityInstances: allInstances});
+                    processResponse(instancesResults, 'Tracked entity instance');
+                }
+            } catch (e) {
+                winston.log('error', JSON.stringify(e));
+            }
 
-            const enrollmentInserts = _.chunk(newEnrollments, 50).map(enrollments => {
-                return insertEnrollment({enrollments});
-            });
+            try {
+                if (newEnrollments.length > 0) {
+                    const enrollmentsResults = await insertEnrollment({enrollments: newEnrollments});
+                    processResponse(enrollmentsResults, 'Enrollment');
+                }
+            } catch (e) {
+                winston.log('error', JSON.stringify(e));
+            }
 
-            const eventsInserts = _.chunk(allEvents, 50).map(events => {
-                return insertEvent({events});
-            });
+            try {
+                if (allEvents.length > 0) {
+                    const eventsResults = await insertEvent({events: allEvents});
+                    processResponse(eventsResults, 'Event');
+                }
+            } catch (e) {
+                winston.log('error', JSON.stringify(e));
+            }
 
-            const instancesResults = await Promise.all(instancesInserts);
-            const enrollmentsResults = await Promise.all(enrollmentInserts);
-            const eventsResults = await Promise.all(eventsInserts);
 
-            processResponse(instancesResults, 'Tracked entity instance');
-            processResponse(enrollmentsResults, 'Enrollment');
-            processResponse(eventsResults, 'Event');
+            /*const instancesResults = await insertTrackedEntityInstance({trackedEntityInstances: allInstances});
+            const enrollmentsResults = await insertEnrollment({enrollments:newEnrollments});
+            const eventsResults = await insertEvent({events:allEvents});*/
+
         }
     } catch (e) {
         winston.log('error', JSON.stringify(e));
@@ -896,17 +909,28 @@ const pullMapping = async (args, minimum) => {
 
 };
 
-pullMapping(args, minimum);
+// pullMapping(args, minimum);
 
-/*setInterval(async () => {
-    const reachable = await isReachable(dhisUrl);
-    if (reachable) {
-       await pullMapping(args, minimum);
-        minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
-    } else {
-        winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
-    }
+if (schedule) {
+    setInterval(async () => {
+        const reachable = await isReachable(dhisUrl);
+        if (reachable) {
+            await pullMapping(args, minimum);
+            minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
+        } else {
+            winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
+        }
+    }, schedule);
+} else {
+    isReachable(dhisUrl).then(async reachable => {
+        if (reachable) {
+            await pullMapping(args, minimum);
+            winston.log('info', 'Importing complete');
+        }
+    });
 
-}, 2000);*/
+}
+
+
 
 
