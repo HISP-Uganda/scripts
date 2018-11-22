@@ -13,9 +13,9 @@ const winston = require('./winston');
 const args = minimist(process.argv.slice(2));
 
 
-const username = args['dhis2-username'] || 'admin';
-const password = args['dhis2-password'] || 'district';
-const dhisUrl = args['dhis2-url'] || 'http://localhost:8080/dhis';
+const username = args['dhis2-username'] || 'Socaya';
+const password = args['dhis2-password'] || 'Kololo123$';
+const dhisUrl = args['dhis2-url'] || 'https://eidsr.dev.hispuganda.org';
 const schedule = args['schedule'];
 
 const dhis2 = new url(dhisUrl);
