@@ -30,3 +30,4 @@ connector-*
 *.log
 *.sql
 src/options.js
+package-lock.json
