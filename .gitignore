@@ -29,3 +29,4 @@ yarn.lock
 connector-*
 *.log
 *.sql
+src/options.js

@@ -3,27 +3,31 @@ const moment = require('moment');
 const XLSX = require('xlsx');
 const rq = require('request-promise');
 const _ = require('lodash');
-const minimist = require('minimist');
 const fs = require("fs");
-// const db = require('odbc')();
-const url = require('url').URL;
+const URL = require('url').URL;
 const isReachable = require('is-reachable');
 const winston = require('./winston');
 
-const args = minimist(process.argv.slice(2));
+let {
+    username,
+    password,
+    url,
+    schedule,
+    scheduleTime,
+    dataType,
+    dataUsername,
+    dataPassword,
+    dataURL,
+    queryFile,
+    minimum
+} = require('./options');
 
 
-const username = args['dhis2-username'] || 'Socaya';
-const password = args['dhis2-password'] || 'Kololo123$';
-const dhisUrl = args['dhis2-url'] || 'https://eidsr.dev.hispuganda.org';
-const schedule = args['schedule'];
-
-const dhis2 = new url(dhisUrl);
+const dhis2 = new URL(url);
 
 dhis2.username = username;
 dhis2.password = password;
 
-let minimum = args['minimum'] || '1900-01-01 00:00:00';
 
 const baseUrl = dhis2.toString() + '/api/';
 
@@ -774,7 +778,7 @@ const insertEvent = (data) => {
 };
 
 
-const pullMapping = async (args, minimum) => {
+const pullMapping = async (minimum) => {
     try {
         let mappings = await rq({
             url: MAPPING_URL,
@@ -782,29 +786,29 @@ const pullMapping = async (args, minimum) => {
         });
         for (const mapping of mappings) {
             let data = null;
-            if (args.d && args.d !== '' && args.s && args.s !== '') {
-                switch (args.d) {
+            if (dataType && dataType !== '' && dataURL && dataURL !== '') {
+                switch (dataType) {
                     case 'mysql':
-                        if (args.file && fileExists(args.file)) {
-                            const sql = fs.readFileSync(args.file).toString();
-                            data = await readMysql(args.s, sql, [minimum, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]);
+                        if (queryFile && fileExists(queryFile)) {
+                            const sql = fs.readFileSync(queryFile).toString();
+                            data = await readMysql(dataURL, sql, [minimum, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]);
 
                         } else {
                             winston.log('error', 'Mysql query file not found');
                         }
                         break;
                     case 'excel':
-                        if (args.s && fileExists(args.s)) {
-                            data = readExcel(args.s);
+                        if (dataURL && fileExists(dataURL)) {
+                            data = readExcel(dataURL);
                         } else {
                             winston.log('error', 'Specified excel file can not be found');
                         }
                         break;
                     case 'excel-download':
-                        const downloadUrl = new url(args.s);
-                        if (args.username && args.password) {
-                            downloadUrl.username = args.username;
-                            downloadUrl.password = args.password;
+                        const downloadUrl = new url(dataURL);
+                        if (dataUsername && dataPassword) {
+                            downloadUrl.username = dataUsername;
+                            downloadUrl.password = dataPassword;
                         }
                         const reachable = await isReachable(downloadUrl);
                         if (reachable) {
@@ -814,11 +818,11 @@ const pullMapping = async (args, minimum) => {
                         }
                         break;
                     case 'access':
-                        data = readAccess(args.s);
+                        data = readAccess(dataURL);
                         break;
                     default:
                         winston.log('error', 'Unknown database', {
-                            value: args.d,
+                            value: dataType,
                             expected: ['mysql', 'excel', 'access']
                         });
                 }
@@ -897,35 +901,31 @@ const pullMapping = async (args, minimum) => {
                 winston.log('error', JSON.stringify(e));
             }
 
-
-            /*const instancesResults = await insertTrackedEntityInstance({trackedEntityInstances: allInstances});
-            const enrollmentsResults = await insertEnrollment({enrollments:newEnrollments});
-            const eventsResults = await insertEvent({events:allEvents});*/
-
         }
     } catch (e) {
         winston.log('error', JSON.stringify(e));
     }
-
 };
 
 // pullMapping(args, minimum);
 
 if (schedule) {
     setInterval(async () => {
-        const reachable = await isReachable(dhisUrl);
+        const reachable = await isReachable(url);
         if (reachable) {
-            await pullMapping(args, minimum);
+            await pullMapping(minimum);
             minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
         } else {
             winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
         }
-    }, schedule);
+    }, scheduleTime);
 } else {
-    isReachable(dhisUrl).then(async reachable => {
+    isReachable(url).then(async reachable => {
         if (reachable) {
-            await pullMapping(args, minimum);
+            await pullMapping(minimum);
             winston.log('info', 'Importing complete');
+        } else {
+            winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
         }
     });
 
