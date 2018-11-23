@@ -880,7 +880,7 @@ const pullMapping = async (minimum) => {
                     processResponse(instancesResults, 'Tracked entity instance');
                 }
             } catch (e) {
-                winston.log('error', JSON.stringify(e));
+                processResponse(e, 'Tracked entity instance');
             }
 
             try {
@@ -889,7 +889,7 @@ const pullMapping = async (minimum) => {
                     processResponse(enrollmentsResults, 'Enrollment');
                 }
             } catch (e) {
-                winston.log('error', JSON.stringify(e));
+                processResponse(e, 'Enrollment');
             }
 
             try {
@@ -898,7 +898,7 @@ const pullMapping = async (minimum) => {
                     processResponse(eventsResults, 'Event');
                 }
             } catch (e) {
-                winston.log('error', JSON.stringify(e));
+                processResponse(e, 'Event');
             }
 
         }
