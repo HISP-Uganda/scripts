@@ -296,7 +296,7 @@ const validateValue = (dataType, value, optionSet) => {
         } else if (dataType === 'DATE') {
             return moment(value).format('YYYY-MM-DD')
         } else if (dataType === 'TIME') {
-            return moment(value).format('HH:mm:ss')
+            return moment(value).format('HH:mm')
         }
         return value;
     }
