@@ -705,11 +705,21 @@ const processData = (mapping, data, foundEntities) => {
         });
     }
 
-    winston.log('info', newTrackedEntityInstances.length + ' new tracked entity instances found');
-    winston.log('info', trackedEntityInstancesUpdate.length + ' tracked entity instances updates found');
-    winston.log('info', newEnrollments.length + ' new enrollments found');
-    winston.log('info', newEvents.length + ' new events found');
-    winston.log('info', eventsUpdate.length + ' new event updates found');
+    if (newTrackedEntityInstances.length) {
+        winston.log('info', newTrackedEntityInstances.length + ' new tracked entity instances found');
+    }
+    if (trackedEntityInstancesUpdate.length) {
+        winston.log('info', trackedEntityInstancesUpdate.length + ' tracked entity instances updates found');
+    }
+    if (newEnrollments.length) {
+        winston.log('info', newEnrollments.length + ' new enrollments found');
+    }
+    if (newEvents.length) {
+        winston.log('info', newEvents.length + ' new events found');
+    }
+    if (eventsUpdate.length) {
+        winston.log('info', eventsUpdate.length + ' new event updates found');
+    }
 
     return {
         newTrackedEntityInstances,
