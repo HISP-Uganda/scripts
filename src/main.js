@@ -7,6 +7,9 @@ const fs = require("fs");
 const URL = require('url').URL;
 const isReachable = require('is-reachable');
 const winston = require('./winston');
+const scheduler = require('node-schedule');
+
+const mapping = require('./mapping');
 
 let {
     username,
@@ -29,7 +32,7 @@ dhis2.username = username;
 dhis2.password = password;
 
 
-const baseUrl = dhis2.toString() + '/api/';
+const baseUrl = dhis2.toString() + 'api/';
 
 const MAPPING_URL = baseUrl + 'dataStore/bridge/mappings';
 const TRACKED_ENTITY_URL = baseUrl + 'trackedEntityInstances';
@@ -37,7 +40,7 @@ const EVENT_URL = baseUrl + 'events';
 const ENROLLMENT_URL = baseUrl + 'enrollments';
 
 
-const getUniqueColumn = mapping => {
+const getUniqueColumn = () => {
     const unique = mapping.programTrackedEntityAttributes.filter(a => {
         return a.trackedEntityAttribute.unique && a.column;
     });
@@ -100,8 +103,8 @@ const readMysql = async (url, query, params) => {
     return data;
 };
 
-const getUniqueIds = (mapping, data) => {
-    const uniqueColumn = getUniqueColumn(mapping);
+const getUniqueIds = (data) => {
+    const uniqueColumn = getUniqueColumn();
     if (uniqueColumn !== null && data && data.length > 0) {
         const foundIds = data.map(d => {
             return d[uniqueColumn];
@@ -113,7 +116,7 @@ const getUniqueIds = (mapping, data) => {
     return [];
 };
 
-const getUniqueAttribute = mapping => {
+const getUniqueAttribute = () => {
     const unique = mapping.programTrackedEntityAttributes.filter(a => {
         return a.trackedEntityAttribute.unique;
     });
@@ -127,9 +130,9 @@ const getUniqueAttribute = mapping => {
 };
 
 
-const searchTrackedEntities = async (mapping, uniqueIds) => {
+const searchTrackedEntities = async (uniqueIds) => {
     let foundEntities = [];
-    const uniqueAttribute = getUniqueAttribute(mapping);
+    const uniqueAttribute = getUniqueAttribute();
 
     const all = uniqueIds.map(uniqueId => {
         const params = {
@@ -137,8 +140,8 @@ const searchTrackedEntities = async (mapping, uniqueIds) => {
             ouMode: 'ALL',
             filter: uniqueAttribute + ':IN:' + uniqueId,
             fields: 'trackedEntityInstance,orgUnit,attributes[attribute,value],enrollments[enrollment,program,' +
-                'trackedEntityInstance,trackedEntityType,enrollmentDate,incidentDate,orgUnit,events[program,trackedEntityInstance,event,' +
-                'eventDate,programStage,orgUnit,dataValues[dataElement,value]]]'
+                'trackedEntityInstance,trackedEntityType,trackedEntity,enrollmentDate,incidentDate,orgUnit,events[program,trackedEntityInstance,event,' +
+                'eventDate,status,completedDate,coordinate,programStage,orgUnit,dataValues[dataElement,value]]]'
         };
         return rq({
             url: TRACKED_ENTITY_URL, qs: params, json: true
@@ -208,9 +211,11 @@ const searchEvent = (enrollmentEvents, stageEventFilters, stage, e) => {
         if (!stageEventFilters) {
             return false
         } else if (stageEventFilters.elements && stageEventFilters.event) {
+            // console.log(stageEventFilters.elements);
             const filteredAndSame = stageEventFilters.elements.map(se => {
                 const foundPrevious = _.filter(item.dataValues, {dataElement: se});
                 const foundCurrent = _.filter(e.dataValues, {dataElement: se});
+
                 if (foundCurrent.length > 0 && foundPrevious.length > 0) {
                     const exists = foundPrevious[0].value === foundCurrent[0].value;
                     return {exists};
@@ -335,8 +340,8 @@ const fileExists = (file) => {
     return fs.existsSync(file);
 };
 
-const searchedInstances = (trackedEntityInstances, mapping) => {
-    const uniqueAttribute = getUniqueAttribute(mapping);
+const searchedInstances = (trackedEntityInstances) => {
+    const uniqueAttribute = getUniqueAttribute();
     const entities = trackedEntityInstances.map(e => {
         const foundAttribute = _.find(e.attributes, {attribute: uniqueAttribute});
         const val = foundAttribute ? foundAttribute['value'] : null;
@@ -348,12 +353,12 @@ const searchedInstances = (trackedEntityInstances, mapping) => {
     return _.groupBy(entities, uniqueAttribute);
 };
 
-const isTracker = mapping => {
+const isTracker = () => {
     return mapping.programType === 'WITH_REGISTRATION';
 };
 
 
-const processData = (mapping, data, foundEntities) => {
+const processData = (data, foundEntities) => {
 
     let eventsUpdate = [];
     let trackedEntityInstancesUpdate = [];
@@ -364,7 +369,7 @@ const processData = (mapping, data, foundEntities) => {
 
     let duplicates = [];
 
-    const uniqueColumn = getUniqueColumn(mapping);
+    const uniqueColumn = getUniqueColumn();
 
     const programStages = mapping.programStages;
     const eventDateColumn = mapping.eventDateColumn;
@@ -372,7 +377,7 @@ const processData = (mapping, data, foundEntities) => {
     const enrollmentDateColumn = mapping.enrollmentDateColumn;
     const incidentDateColumn = mapping.incidentDateColumn;
 
-    const searched = searchedInstances(foundEntities, mapping);
+    const searched = searchedInstances(foundEntities);
 
     if (uniqueColumn) {
         let clients = _.groupBy(data, uniqueColumn);
@@ -422,20 +427,20 @@ const processData = (mapping, data, foundEntities) => {
                             longitude: d[stage.longitudeColumn.value]
                         };
                     }
-                    if (eventDate && mapped.length) {
+                    if (eventDate && mapped.length > 0) {
                         mapped.forEach(e => {
                             const value = d[e.column.value];
-                            const type = e.dataElement.valueType;
+                            const type = e.dataElement['valueType'];
                             const row = client.client;
                             const column = e.column.value;
-                            const optionsSet = e.dataElement.optionSet;
+                            const optionsSet = e.dataElement['optionSet'];
                             const validatedValue = validateValue(type, value, optionsSet);
                             if (value !== '' && validatedValue !== null) {
                                 dataValues = [...dataValues, {
                                     dataElement: e.dataElement.id,
                                     value: validatedValue
                                 }];
-                            } else if (value !== undefined) {
+                            } else if (value !== undefined && value !== null) {
 
                                 const error = optionsSet === null ? 'Invalid value ' + value + ' for value type ' + type :
                                     'Invalid value: ' + value + ', expected: ' + _.map(optionsSet.options, o => {
@@ -444,7 +449,7 @@ const processData = (mapping, data, foundEntities) => {
 
                                 const message = [error, 'row:' + row, 'column:' + column].join(' ');
 
-                                winston.log('warn', message);
+                                // winston.log('warn', message);
                             } else if (value === '') {
                                 winston.log('info', 'value was empty on column: ' + column + ', row: ' + row);
                             }
@@ -454,7 +459,8 @@ const processData = (mapping, data, foundEntities) => {
                             dataValues,
                             eventDate,
                             programStage: stage.id,
-                            program: mapping.id
+                            program: mapping.id,
+                            event: generateUid()
                         };
 
                         if (coordinate) {
@@ -504,7 +510,7 @@ const processData = (mapping, data, foundEntities) => {
 
                         const message = [error, 'row:' + row, 'column:' + column].join(' ');
 
-                        winston.log('warn', message);
+                        // winston.log('warn', message);
                     }
 
                 });
@@ -513,7 +519,7 @@ const processData = (mapping, data, foundEntities) => {
                     allAttributes = [...allAttributes, attributes];
                 }
 
-                if (isTracker(mapping) && enrollmentDateColumn && incidentDateColumn) {
+                if (isTracker() && enrollmentDateColumn && incidentDateColumn) {
                     const enrollmentDate = moment(d[enrollmentDateColumn.value]);
                     const incidentDate = moment(d[incidentDateColumn.value]);
 
@@ -535,7 +541,6 @@ const processData = (mapping, data, foundEntities) => {
             if (client.previous.length > 1) {
                 duplicates = [...duplicates, client.previous]
             } else if (client.previous.length === 1) {
-
                 client.previous.forEach(p => {
                     const nAttributes = _.differenceBy(allAttributes[0], p['attributes'], _.isEqual);
                     let enrollments = p['enrollments'];
@@ -603,9 +608,12 @@ const processData = (mapping, data, foundEntities) => {
 
                             evs = removeDuplicates(evs, stageEventFilters);
 
+                            // console.log(evs);
+
                             if (repeatable) {
                                 evs.forEach(e => {
                                     const eventIndex = searchEvent(enrollmentEvents, stageEventFilters, stage, e);
+                                    // console.log(eventIndex, client.client, e);
                                     if (eventIndex !== -1) {
                                         const stageEvent = enrollmentEvents[eventIndex];
                                         const merged = _.unionBy(e['dataValues'], stageEvent['dataValues'], 'dataElement');
@@ -680,23 +688,19 @@ const processData = (mapping, data, foundEntities) => {
                                     if (!repeatable) {
                                         newEvents = [...newEvents, _.maxBy(evs, 'eventDate')];
                                     } else {
-                                        /*const grouped = _.groupBy(evs, 'eventDate');
-                                        _.forOwn(grouped, (esr, eventDate) => {
-                                            newEvents = [...newEvents, _.last(esr)];
-                                        });*/
                                         newEvents = [...newEvents, ...evs]
                                     }
                                 });
                             }
                             newEnrollments = [...newEnrollments, enrollment];
-                        } else if (!isTracker(mapping) && mapping.createNewEvents) {
+                        } else if (!isTracker() && mapping.createNewEvents) {
                             events = events.map(e => {
                                 return {...e, orgUnit: orgUnit.id}
                             });
                             newEvents = [...newEvents, ...events];
                         }
                     } else {
-                        winston.log('warn', 'Organisation unit ' + orgUnits[0] + ' not found using strategy ' + mapping.orgUnitStrategy.value);
+                        // winston.log('warn', 'Organisation unit ' + orgUnits[0] + ' not found using strategy ' + mapping.orgUnitStrategy.value);
                     }
                 } else if (orgUnits.length === 0) {
                     winston.log('warn', 'Organisation unit missing for entity: ' + client.client);
@@ -715,6 +719,7 @@ const processData = (mapping, data, foundEntities) => {
         winston.log('info', newEnrollments.length + ' new enrollments found');
     }
     if (newEvents.length) {
+        console.log(JSON.stringify(newEvents, null, 2));
         winston.log('info', newEvents.length + ' new events found');
     }
     if (eventsUpdate.length) {
@@ -742,25 +747,26 @@ const insertTrackedEntityInstance = (data) => {
     return rq(options);
 };
 
-const processResponse = (responses, type) => {
-    responses.forEach(response => {
-        if (response['httpStatusCode'] === 200) {
-            const {importSummaries} = response['response'];
-            importSummaries.forEach(importSummary => {
-                const {importCount, reference} = importSummary;
+const processResponse = (response, type) => {
+    // console.log(JSON.stringify(response, null, 2));
+    // responses.forEach(response => {
+    if (response['httpStatusCode'] === 200) {
+        const {importSummaries} = response['response'];
+        importSummaries.forEach(importSummary => {
+            const {importCount, reference} = importSummary;
 
-                winston.log('info', type + ' with id, ' + reference + ' imported: ' + importCount.imported + ', updated: ' + importCount.updated + ', deleted: ' + importCount.deleted);
+            winston.log('info', type + ' with id, ' + reference + ' imported: ' + importCount.imported + ', updated: ' + importCount.updated + ', deleted: ' + importCount.deleted);
+        });
+    } else if (response['httpStatusCode'] === 409) {
+        _.forEach(response['response']['importSummaries'], (s) => {
+            _.forEach(s['conflicts'], (conflict) => {
+                winston.log('warn', type + ' conflict found, object: ' + conflict.object + ', message: ' + conflict.value);
             });
-        } else if (response['httpStatusCode'] === 409) {
-            _.forEach(response['response']['importSummaries'], (s) => {
-                _.forEach(s['conflicts'], (conflict) => {
-                    winston.log('warn', type + ' conflict found, object: ' + conflict.object + ', message: ' + conflict.value);
-                });
-            });
-        } else if (response['httpStatusCode'] === 500) {
-            winston.log('error', type + ' error found, message: ' + response['error'].message)
-        }
-    });
+        });
+    } else if (response['httpStatusCode'] === 500) {
+        winston.log('error', type + ' error found, message: ' + response['error'].message)
+    }
+    // });
 };
 
 
@@ -789,138 +795,133 @@ const insertEvent = (data) => {
 
 
 const pullMapping = async (minimum) => {
-    try {
-        let mappings = await rq({
-            url: MAPPING_URL,
-            json: true
-        });
-        for (const mapping of mappings) {
-            let data = null;
-            if (dataType && dataType !== '' && dataURL && dataURL !== '') {
-                switch (dataType) {
-                    case 'mysql':
-                        if (queryFile && fileExists(queryFile)) {
-                            const sql = fs.readFileSync(queryFile).toString();
-                            data = await readMysql(dataURL, sql, [minimum, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]);
+    // try {
+    let data = null;
+    if (dataType && dataType !== '' && dataURL && dataURL !== '') {
+        switch (dataType) {
+            case 'mysql':
+                if (queryFile && fileExists(queryFile)) {
+                    const sql = fs.readFileSync(queryFile).toString();
+                    data = await readMysql(dataURL, sql, [minimum, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]);
 
-                        } else {
-                            winston.log('error', 'Mysql query file not found');
-                        }
-                        break;
-                    case 'excel':
-                        if (dataURL && fileExists(dataURL)) {
-                            data = readExcel(dataURL);
-                        } else {
-                            winston.log('error', 'Specified excel file can not be found');
-                        }
-                        break;
-                    case 'excel-download':
-                        const downloadUrl = new url(dataURL);
-                        if (dataUsername && dataPassword) {
-                            downloadUrl.username = dataUsername;
-                            downloadUrl.password = dataPassword;
-                        }
-                        const reachable = await isReachable(downloadUrl);
-                        if (reachable) {
-                            data = await downloadExcel(downloadUrl.toString());
-                        } else {
-                            winston.log('error', 'Specified url not reachable');
-                        }
-                        break;
-                    case 'access':
-                        data = readAccess(dataURL);
-                        break;
-                    default:
-                        winston.log('error', 'Unknown database', {
-                            value: dataType,
-                            expected: ['mysql', 'excel', 'access']
-                        });
+                } else {
+                    winston.log('error', 'Mysql query file not found');
                 }
-
-            } else if (mapping.url !== '') {
-                let params = {};
-                if (mapping.dateFilter !== '' && mapping.dateEndFilter !== '') {
-                    if (minimum !== null) {
-                        params = {
-                            ...params, ..._.fromPairs([[mapping.dateFilter, minimum],
-                                [mapping.dateEndFilter, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]])
-                        };
-                    }
+                break;
+            case 'excel':
+                if (dataURL && fileExists(dataURL)) {
+                    data = readExcel(dataURL);
+                } else {
+                    winston.log('error', 'Specified excel file can not be found');
                 }
-
-                try {
-                    const reachable = await isReachable(mapping.url);
-                    if (reachable) {
-                        data = await rq({
-                            url: mapping.url,
-                            qs: params,
-                            json: true
-                        });
-                    } else {
-                        winston.log('error', 'Url specified in the mapping not reachable');
-                    }
-                } catch (e) {
-                    winston.log('error', e.toString());
+                break;
+            case 'excel-download':
+                const downloadUrl = new url(dataURL);
+                if (dataUsername && dataPassword) {
+                    downloadUrl.username = dataUsername;
+                    downloadUrl.password = dataPassword;
                 }
+                const reachable = await isReachable(downloadUrl);
+                if (reachable) {
+                    data = await downloadExcel(downloadUrl.toString());
+                } else {
+                    winston.log('error', 'Specified url not reachable');
+                }
+                break;
+            case 'access':
+                data = readAccess(dataURL);
+                break;
+            default:
+                winston.log('error', 'Unknown database', {
+                    value: dataType,
+                    expected: ['mysql', 'excel', 'access']
+                });
+        }
 
+    } else if (mapping.url !== '') {
+        let params = {};
+        if (mapping.dateFilter !== '' && mapping.dateEndFilter !== '') {
+            if (minimum !== null) {
+                params = {
+                    ...params, ..._.fromPairs([[mapping.dateFilter, minimum],
+                        [mapping.dateEndFilter, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]])
+                };
+            }
+        }
+
+        try {
+            const reachable = await isReachable(mapping.url);
+            if (reachable) {
+                data = await rq({
+                    url: mapping.url,
+                    qs: params,
+                    json: true
+                });
             } else {
-                winston.log('warn', 'Url not found in the mapping or database and connection url not specified');
+                winston.log('error', 'Url specified in the mapping not reachable');
             }
+        } catch (e) {
+            winston.log('error', e.toString());
+        }
 
-            const uniqueIds = getUniqueIds(mapping, data);
-            const foundEntities = await searchTrackedEntities(mapping, uniqueIds);
-            const processed = processData(mapping, data, foundEntities);
+    } else {
+        winston.log('warn', 'Url not found in the mapping or database and connection url not specified');
+    }
 
-            // Inserting
+    const uniqueIds = getUniqueIds(data);
+    const foundEntities = await searchTrackedEntities(uniqueIds);
+    const processed = processData(data, foundEntities);
 
-            const {
-                newTrackedEntityInstances,
-                newEnrollments,
-                newEvents,
-                trackedEntityInstancesUpdate,
-                eventsUpdate
-            } = processed;
+    // Inserting
 
-            const allInstances = [...newTrackedEntityInstances, ...trackedEntityInstancesUpdate];
-            const allEvents = [...newEvents, ...eventsUpdate];
+    const {
+        newTrackedEntityInstances,
+        newEnrollments,
+        newEvents,
+        trackedEntityInstancesUpdate,
+        eventsUpdate
+    } = processed;
 
-            try {
-                if (allInstances.length > 0) {
-                    const instancesResults = await insertTrackedEntityInstance({trackedEntityInstances: allInstances});
-                    processResponse(instancesResults, 'Tracked entity instance');
-                }
-            } catch (e) {
-                processResponse(e, 'Tracked entity instance');
-            }
+    const allInstances = [...newTrackedEntityInstances, ...trackedEntityInstancesUpdate];
+    const allEvents = [...newEvents, ...eventsUpdate];
 
-            try {
-                if (newEnrollments.length > 0) {
-                    const enrollmentsResults = await insertEnrollment({enrollments: newEnrollments});
-                    processResponse(enrollmentsResults, 'Enrollment');
-                }
-            } catch (e) {
-                processResponse(e, 'Enrollment');
-            }
 
-            try {
-                if (allEvents.length > 0) {
-                    const eventsResults = await insertEvent({events: allEvents});
-                    processResponse(eventsResults, 'Event');
-                }
-            } catch (e) {
-                processResponse(e, 'Event');
-            }
-
+    try {
+        if (allInstances.length > 0) {
+            const instancesResults = await insertTrackedEntityInstance({trackedEntityInstances: allInstances});
+            processResponse(instancesResults, 'Tracked entity instance');
         }
     } catch (e) {
-        winston.log('error', JSON.stringify(e));
+        processResponse(e, 'Tracked entity instance');
     }
+
+    try {
+        if (newEnrollments.length > 0) {
+            const enrollmentsResults = await insertEnrollment({enrollments: newEnrollments});
+            processResponse(enrollmentsResults, 'Enrollment');
+        }
+    } catch (e) {
+        processResponse(e, 'Enrollment');
+    }
+
+    try {
+        if (allEvents.length > 0) {
+            const eventsResults = await insertEvent({events: allEvents});
+            processResponse(eventsResults, 'Event');
+            // console.log(allEvents);
+        }
+    } catch (e) {
+        processResponse(e, 'Event');
+    }
+    /* } catch (e) {
+         winston.log('error', JSON.stringify(e));
+     }*/
 };
 
 // pullMapping(args, minimum);
 
 if (schedule) {
-    setInterval(async () => {
+    const job = scheduler.scheduleJob('*/15 * * * * *', async () => {
         const reachable = await isReachable(url);
         if (reachable) {
             await pullMapping(minimum);
@@ -928,7 +929,7 @@ if (schedule) {
         } else {
             winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
         }
-    }, scheduleTime);
+    });
 } else {
     isReachable(url).then(async reachable => {
         if (reachable) {
