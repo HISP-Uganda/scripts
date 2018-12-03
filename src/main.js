@@ -850,16 +850,16 @@ const pullMapping = async (minimum) => {
         }
 
         try {
-            const reachable = await isReachable(mapping.url);
-            if (reachable) {
-                data = await rq({
-                    url: mapping.url,
-                    qs: params,
-                    json: true
-                });
-            } else {
-                winston.log('error', 'Url specified in the mapping not reachable');
-            }
+            // const reachable = await isReachable(mapping.url);
+            // if (reachable) {
+            data = await rq({
+                url: mapping.url,
+                qs: params,
+                json: true
+            });
+            // } else {
+            //     winston.log('error', 'Url specified in the mapping not reachable');
+            // }
         } catch (e) {
             winston.log('error', e.toString());
         }
@@ -921,14 +921,14 @@ const pullMapping = async (minimum) => {
 // pullMapping(args, minimum);
 
 if (schedule) {
-    const job = scheduler.scheduleJob('*/15 * * * * *', async () => {
-        const reachable = await isReachable(url);
-        if (reachable) {
-            await pullMapping(minimum);
-            minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
-        } else {
-            winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
-        }
+    const job = scheduler.scheduleJob('*/' + scheduleTime + ' * * * * *', async () => {
+        // const reachable = await isReachable(url);
+        // if (reachable) {
+        await pullMapping(minimum);
+        minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
+        // } else {
+        //     winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
+        // }
     });
 } else {
     isReachable(url).then(async reachable => {
