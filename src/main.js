@@ -764,7 +764,7 @@ const processResponse = (response, type) => {
             });
         });
     } else if (response['httpStatusCode'] === 500) {
-        winston.log('error', type + ' error found, message: ' + response['error'].message)
+        winston.log('error', JSON.stringify(response, null, 2));
     }
     // });
 };
