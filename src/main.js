@@ -217,7 +217,6 @@ const removeDuplicates = (evs, stageEventFilters) => {
       return v.eventDate;
     });
   }
-
   return evs;
 };
 
@@ -226,7 +225,6 @@ const searchEvent = (enrollmentEvents, stageEventFilters, stage, e) => {
     if (!stageEventFilters) {
       return false
     } else if (stageEventFilters.elements && stageEventFilters.event) {
-      // console.log(stageEventFilters.elements);
       const filteredAndSame = stageEventFilters.elements.map(se => {
         const foundPrevious = _.filter(item.dataValues, {
           dataElement: se
@@ -301,7 +299,7 @@ const validText = (dataType, value) => {
     case 'UNIT_INTERVAL':
       return value >= 0 && value <= 1;
     case 'INTEGER_NEGATIVE':
-      return Number.isInteger(value) && value >= 0;
+      return Number.isInteger(value) && value < 0;
     case 'NEGATIVE_INTEGER':
       return Number.isInteger(value) && value < 0;
     case 'INTEGER_ZERO_OR_POSITIVE':
