@@ -1,4 +1,5 @@
   {
+    "lastUpdated": "2018-10-05T10:35:17.507",
     "name": "033: Immediate Case-Based Reporting Form",
     "id": "p55TSnIz83Z",
     "programType": "WITH_REGISTRATION",
@@ -2327,7 +2328,7 @@
               "displayName": "Location",
               "valueType": "TEXT",
               "optionSet": null,
-              "identifiesEvent": false
+              "identifiesEvent": true
             },
             "column": {
               "label": "location",
@@ -8218,6 +8219,7 @@
     "trackedEntityType": {
       "id": "MCPQUTHX1Ze"
     },
+    "mappingId": 1,
     "orgUnitColumn": {
       "label": "facility_of_origin",
       "value": "facility_of_origin"
@@ -33971,12 +33973,14 @@
     "headerRow": 1,
     "dataStartRow": 2,
     "createNewEvents": true,
+    "updateEvents": true,
     "eventDateColumn": {
       "label": "date",
       "value": "date"
     },
     "scheduleTime": 0,
     "url": "http://localhost:3001/eidsr",
-    "dateFilter": "start_date",
-    "dateEndFilter": "end_date"
+    "dateFilter": "",
+    "dateEndFilter": "",
+    "lastRun": "2019-01-14 19:45:48"
   }

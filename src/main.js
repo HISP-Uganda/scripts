@@ -10,9 +10,9 @@ const winston = require('./winston');
 const scheduler = require('node-schedule');
 
 const mapping = require('./mapping.json');
+mapping.dataSource = 3;
 
 let {username, password, url, schedule, scheduleTime, dataType, dataUsername, dataPassword, dataURL, queryFile, minimum} = require('./options');
-
 
 const dhis2 = new URL(url);
 
@@ -103,11 +103,12 @@ const readMysql = async (url, query, params) => {
 const getUniqueIds = (data) => {
   const uniqueColumn = getUniqueColumn();
   if (uniqueColumn !== null && data && data.length > 0) {
-    const foundIds = data.map(d => {
+    let foundIds = data.map(d => {
       return d[uniqueColumn];
     }).filter(c => {
       return c !== null && c !== undefined;
     });
+    foundIds = _.uniq(foundIds);
     return _.chunk(foundIds, 50).map(ids => ids.join(';'));
   }
   return [];
@@ -245,7 +246,8 @@ const searchEvent = (enrollmentEvents, stageEventFilters, stage, e) => {
         }
       });
       return item.programStage === stage &&
-        moment(item.eventDate).format('YYYY-MM-DD') === moment(e.eventDate).format('YYYY-MM-DD')
+        moment(item.eventDate).format('YYYY-MM-DD') ===
+        moment(e.eventDate).format('YYYY-MM-DD')
         && _.every(filteredAndSame, 'exists');
     } else if (stageEventFilters.elements) {
       const filteredAndSame = stageEventFilters.elements.map(se => {
@@ -337,7 +339,7 @@ const validateValue = (dataType, value, optionSet) => {
   return null;
 };
 
-const searchOrgUnit = (val, mapping) => {
+const searchOrgUnit = val => {
   const orgUnitStrategy = mapping.orgUnitStrategy;
   const organisationUnits = mapping.organisationUnits;
   switch (orgUnitStrategy.value) {
@@ -382,18 +384,18 @@ const fileExists = (file) => {
 };
 
 const searchedInstances = (trackedEntityInstances) => {
-  const uniqueAttribute = getUniqueAttribute();
+  const unique = getUniqueAttribute();
   const entities = trackedEntityInstances.map(e => {
-    const foundAttribute = _.find(e.attributes, {
-      attribute: uniqueAttribute
+    const uniqueAttribute = _.find(e.attributes, {
+      attribute: unique
     });
-    const val = foundAttribute ? foundAttribute['value'] : null;
+    const val = uniqueAttribute ? uniqueAttribute['value'] : null;
     return {
       ...e,
-      ..._.fromPairs([[uniqueAttribute, val]])
+      ..._.fromPairs([[unique, val]])
     }
   });
-  return _.groupBy(entities, uniqueAttribute);
+  return _.groupBy(entities, unique);
 };
 
 const isTracker = () => {
@@ -402,6 +404,7 @@ const isTracker = () => {
 
 
 const processData = (data, foundEntities) => {
+
   let eventsUpdate = [];
   let trackedEntityInstancesUpdate = [];
 
@@ -410,6 +413,8 @@ const processData = (data, foundEntities) => {
   let newTrackedEntityInstances = [];
 
   let duplicates = [];
+  let conflicts = [];
+  let errors = [];
 
   const uniqueColumn = getUniqueColumn();
 
@@ -421,10 +426,9 @@ const processData = (data, foundEntities) => {
 
   const searched = searchedInstances(foundEntities);
   if (uniqueColumn) {
-    // Ignore data without unique column
     data = data.filter(d => {
-      return d[uniqueColumn] && d[uniqueColumn] !== null && d[uniqueColumn] !== undefined
-    })
+      return d[uniqueColumn] !== null && d[uniqueColumn] !== undefined;
+    });
     let clients = _.groupBy(data, uniqueColumn);
     let newClients = [];
     _.forOwn(clients, (data, client) => {
@@ -457,11 +461,16 @@ const processData = (data, foundEntities) => {
       currentData.forEach(d => {
         programStages.forEach(stage => {
           let dataValues = [];
-          let eventDate = null;
-          const momentDate = moment(d[eventDateColumn.value]);
-          if (momentDate.isValid()) {
-            eventDate = momentDate.format('YYYY-MM-DD');
+          let eventDate;
+          if ((mapping.createNewEvents || mapping.updateEvents) && mapping.dataSource === 2) {
+            eventDate = d[eventDateColumn.value];
+          } else if (mapping.createNewEvents || mapping.updateEvents) {
+            const date = moment(d[eventDateColumn.value], 'YYYY-MM-DD');
+            if (date.isValid()) {
+              eventDate = date.format('YYYY-MM-DD');
+            }
           }
+
           const mapped = stage.programStageDataElements.filter(e => {
             return e.column && e.column.value
           });
@@ -483,28 +492,24 @@ const processData = (data, foundEntities) => {
           if (eventDate && mapped.length > 0) {
             mapped.forEach(e => {
               const value = d[e.column.value];
-              const type = e.dataElement['valueType'];
+              const type = e.dataElement.valueType;
+              const optionsSet = e.dataElement.optionSet;
+              const validatedValue = validateValue(type, value, optionsSet);
               const row = client.client;
               const column = e.column.value;
-              const optionsSet = e.dataElement['optionSet'];
-              const validatedValue = validateValue(type, value, optionsSet);
               if (value !== '' && validatedValue !== null) {
                 dataValues = [...dataValues, {
                   dataElement: e.dataElement.id,
                   value: validatedValue
                 }];
-              } else if (value !== undefined && value !== null) {
-
+              } else if (value !== undefined) {
                 const error = optionsSet === null ? 'Invalid value ' + value + ' for value type ' + type :
                   'Invalid value: ' + value + ', expected: ' + _.map(optionsSet.options, o => {
                     return o.code
                   }).join(',');
 
                 const message = [error, 'row:' + row, 'column:' + column].join(' ');
-
-              // winston.log('warn', message);
-              } else if (value === '') {
-                winston.log('info', 'value was empty on column: ' + column + ', row: ' + row);
+                winston.log('info', message);
               }
             });
 
@@ -515,7 +520,6 @@ const processData = (data, foundEntities) => {
               program: mapping.id,
               event: generateUid()
             };
-
             if (coordinate) {
               event = {
                 ...event,
@@ -527,7 +531,7 @@ const processData = (data, foundEntities) => {
               event = {
                 ...event, ...{
                       status: 'COMPLETED',
-                      completedDate: eventDate
+                      completedDate: event['eventDate']
                 }
               }
             }
@@ -535,7 +539,6 @@ const processData = (data, foundEntities) => {
             events = [...events, event];
           }
         });
-
         const mappedAttributes = programTrackedEntityAttributes.filter(a => {
           return a.column && a.column.value
         });
@@ -543,30 +546,18 @@ const processData = (data, foundEntities) => {
         let attributes = [];
 
         mappedAttributes.forEach(a => {
-          const row = client.client;
-          const column = a.column.value;
           const value = d[a.column.value];
-          const type = a['valueType'];
+          const type = a.valueType;
           const optionsSet = a.trackedEntityAttribute.optionSet;
           const validatedValue = validateValue(type, value, optionsSet);
+
           if (value !== '' && validatedValue !== null) {
             attributes = [...attributes, {
               attribute: a.trackedEntityAttribute.id,
               value: validatedValue
             }]
-          } else if (value === '') {
+          } else if (value !== undefined) {
             winston.log('info', 'value was empty on column: ' + column + ', row: ' + row);
-          } else {
-
-            const error = optionsSet === null ? 'Invalid value ' + value + ' for value type ' + type :
-              'Invalid value: ' + value + ', expected: ' + _.map(optionsSet.options, o => {
-                return o.code
-              }).join(',');
-
-
-            const message = [error, 'row:' + row, 'column:' + column].join(' ');
-
-          // winston.log('warn', message);
           }
 
         });
@@ -576,8 +567,8 @@ const processData = (data, foundEntities) => {
         }
 
         if (isTracker() && enrollmentDateColumn && incidentDateColumn) {
-          const enrollmentDate = moment(d[enrollmentDateColumn.value]);
-          const incidentDate = moment(d[incidentDateColumn.value]);
+          const enrollmentDate = moment(d[enrollmentDateColumn.value], 'YYYY-MM-DD');
+          const incidentDate = moment(d[incidentDateColumn.value], 'YYYY-MM-DD');
 
           if (enrollmentDate.isValid() && incidentDate.isValid()) {
             enrollmentDates = [...enrollmentDates, {
@@ -591,24 +582,31 @@ const processData = (data, foundEntities) => {
           orgUnits = [...orgUnits, d[mapping.orgUnitColumn.value]]
         }
       });
-
       let groupedEvents = _.groupBy(events, 'programStage');
-
       if (client.previous.length > 1) {
         duplicates = [...duplicates, client.previous]
       } else if (client.previous.length === 1) {
         client.previous.forEach(p => {
-          const nAttributes = _.differenceBy(allAttributes[0], p['attributes'], _.isEqual);
           let enrollments = p['enrollments'];
-          if (nAttributes.length > 0) {
-            const mergedAttributes = _.unionBy(allAttributes[0], p['attributes'], 'attribute');
-            let tei = {
-              ..._.pick(p, ['orgUnit', 'trackedEntityInstance', 'trackedEntityType']),
-              attributes: mergedAttributes
-            };
-            trackedEntityInstancesUpdate = [...trackedEntityInstancesUpdate, tei];
+          if (mapping.updateEntities) {
+            const nAttributes = _.differenceWith(allAttributes[0], p['attributes'], _.isEqual);
+            if (nAttributes.length > 0) {
+              const mergedAttributes = _.unionBy(allAttributes[0], p['attributes'], 'attribute');
+              let tei;
+              if (mapping.trackedEntityType && mapping.trackedEntityType.id) {
+                tei = {
+                  ..._.pick(p, ['orgUnit', 'trackedEntityInstance', 'trackedEntityType']),
+                  attributes: mergedAttributes
+                };
+              } else if (mapping.trackedEntity) {
+                tei = {
+                  ..._.pick(p, ['orgUnit', 'trackedEntityInstance', 'trackedEntity']),
+                  attributes: mergedAttributes
+                };
+              }
+              trackedEntityInstancesUpdate = [...trackedEntityInstancesUpdate, tei];
+            }
           }
-
           events = events.map(e => {
             return {
               ...e,
@@ -621,9 +619,9 @@ const processData = (data, foundEntities) => {
           const enrollmentIndex = _.findIndex(enrollments, {
             program: mapping.id
           });
-          if (enrollmentIndex === -1 && enrollmentDates.length > 0) {
+          if (enrollmentIndex === -1 && mapping.createNewEnrollments && enrollmentDates.length > 0) {
             let enroll = {
-              program: mapping.id,
+              program: id,
               orgUnit: p['orgUnit'],
               trackedEntityInstance: p['trackedEntityInstance'],
               ...enrollmentDates[0]
@@ -645,15 +643,11 @@ const processData = (data, foundEntities) => {
                     newEvents = [...newEvents, ev];
                   }
                 } else {
-
                   newEvents = [...newEvents, ...evs];
                 }
               });
             } else {
-              winston.log({
-                level: 'warn',
-                message: 'Ignoring not creating new events'
-              });
+              console.log('Ignoring not creating new events');
             }
             enrollments = [...enrollments, enroll];
             p = {
@@ -661,11 +655,10 @@ const processData = (data, foundEntities) => {
               enrollments
             }
           } else if (enrollmentIndex === -1 && enrollmentDates.length === 0) {
-            winston.log('warn', 'Ignoring new enrollments');
+            console.log('Ignoring new enrollments');
           } else if (enrollmentIndex !== -1) {
             let enrollment = enrollments[enrollmentIndex];
             let enrollmentEvents = enrollment['events'];
-
             _.forOwn(groupedEvents, (evs, stage) => {
               const stageInfo = _.find(programStages, {
                 id: stage
@@ -676,13 +669,10 @@ const processData = (data, foundEntities) => {
 
               evs = removeDuplicates(evs, stageEventFilters);
 
-              // console.log(evs);
-
               if (repeatable) {
                 evs.forEach(e => {
                   const eventIndex = searchEvent(enrollmentEvents, stageEventFilters, stage, e);
-                  // console.log(eventIndex, client.client, e);
-                  if (eventIndex !== -1) {
+                  if (eventIndex !== -1 && mapping.updateEvents) {
                     const stageEvent = enrollmentEvents[eventIndex];
                     const merged = _.unionBy(e['dataValues'], stageEvent['dataValues'], 'dataElement');
                     const differingElements = _.differenceWith(e['dataValues'], stageEvent['dataValues'], _.isEqual);
@@ -693,7 +683,7 @@ const processData = (data, foundEntities) => {
                       };
                       eventsUpdate = [...eventsUpdate, mergedEvent];
                     }
-                  } else {
+                  } else if (eventIndex === -1 && mapping.createNewEvents) {
                     newEvents = [...newEvents, e];
                   }
                 });
@@ -702,7 +692,7 @@ const processData = (data, foundEntities) => {
                   programStage: stage
                 });
                 let max = _.maxBy(evs, 'eventDate');
-                if (foundEvent) {
+                if (foundEvent && mapping.updateEvents) {
                   const merged = _.unionBy(max['dataValues'], foundEvent['dataValues'], 'dataElement');
                   const differingElements = _.differenceWith(max['dataValues'], foundEvent['dataValues'], _.isEqual);
                   if (merged.length > 0 && differingElements.length > 0) {
@@ -712,7 +702,7 @@ const processData = (data, foundEntities) => {
                     };
                     eventsUpdate = [...eventsUpdate, mergedEvent];
                   }
-                } else {
+                } else if (!foundEvent && mapping.createNewEvents) {
                   newEvents = [...newEvents, max];
                 }
               }
@@ -723,18 +713,33 @@ const processData = (data, foundEntities) => {
         orgUnits = _.uniq(orgUnits);
         let orgUnit;
         if (orgUnits.length > 1) {
-          winston.log('warn', 'Entity belongs to more than one organisation unit for entity: ' + JSON.stringify(client));
+          errors = [...errors, {
+            error: 'Entity belongs to more than one organisation unit',
+            row: client.client
+          }]
         } else if (orgUnits.length === 1) {
-          orgUnit = searchOrgUnit(orgUnits[0], mapping);
+          orgUnit = searchOrgUnit(orgUnits[0]);
           if (orgUnit) {
-            if (enrollmentDates.length > 0 && isTracker && mapping.createNewEnrollments) {
+            if (enrollmentDates.length > 0 && isTracker && mapping.createNewEnrollments && mapping.createEntities) {
               const trackedEntityInstance = generateUid();
               let tei = {
                 orgUnit: orgUnit.id,
                 attributes: allAttributes[0],
-                trackedEntityInstance,
-                trackedEntityType: mapping.trackedEntityType.id,
+                trackedEntityInstance
               };
+
+              if (mapping.trackedEntityType && mapping.trackedEntityType.id) {
+                tei = {
+                  ...tei,
+                  trackedEntityType: mapping.trackedEntityType.id
+                }
+              } else if (mapping.trackedEntity && mapping.trackedEntity.id) {
+                tei = {
+                  ...tei,
+                  trackedEntity: mapping.trackedEntity.id
+                }
+              }
+
               newTrackedEntityInstances = [...newTrackedEntityInstances, tei];
 
               let enrollment = {
@@ -781,7 +786,7 @@ const processData = (data, foundEntities) => {
               newEvents = [...newEvents, ...events];
             }
           } else {
-            // winston.log('warn', 'Organisation unit ' + orgUnits[0] + ' not found using strategy ' + mapping.orgUnitStrategy.value);
+            winston.log('warn', 'Organisation unit ' + orgUnits[0] + ' not found using strategy ' + mapping.orgUnitStrategy.value);
           }
         } else if (orgUnits.length === 0) {
           winston.log('warn', 'Organisation unit missing for entity: ' + client.client);
@@ -790,29 +795,15 @@ const processData = (data, foundEntities) => {
     });
   }
 
-  if (newTrackedEntityInstances.length) {
-    winston.log('info', newTrackedEntityInstances.length + ' new tracked entity instances found');
-  }
-  if (trackedEntityInstancesUpdate.length) {
-    winston.log('info', trackedEntityInstancesUpdate.length + ' tracked entity instances updates found');
-  }
-  if (newEnrollments.length) {
-    winston.log('info', newEnrollments.length + ' new enrollments found');
-  }
-  if (newEvents.length) {
-    console.log(JSON.stringify(newEvents, null, 2));
-    winston.log('info', newEvents.length + ' new events found');
-  }
-  if (eventsUpdate.length) {
-    winston.log('info', eventsUpdate.length + ' new event updates found');
-  }
-
   return {
     newTrackedEntityInstances,
     newEnrollments,
     newEvents,
     trackedEntityInstancesUpdate,
-    eventsUpdate
+    eventsUpdate,
+    conflicts,
+    duplicates,
+    errors
   }
 };
 
@@ -965,28 +956,27 @@ const pullMapping = async (minimum) => {
   const allInstances = [...newTrackedEntityInstances, ...trackedEntityInstancesUpdate];
   const allEvents = [...newEvents, ...eventsUpdate];
 
-
-    try {
-      if (allInstances.length > 0) {
-        const instancesResults = await insertTrackedEntityInstance({
-          trackedEntityInstances: allInstances
-        });
-        processResponse(instancesResults, 'Tracked entity instance');
-      }
-    } catch (e) {
-      processResponse(e, 'Tracked entity instance');
+  try {
+    if (allInstances.length > 0) {
+      const instancesResults = await insertTrackedEntityInstance({
+        trackedEntityInstances: allInstances
+      });
+      processResponse(instancesResults, 'Tracked entity instance');
     }
+  } catch (e) {
+    processResponse(e, 'Tracked entity instance');
+  }
 
-    try {
-      if (newEnrollments.length > 0) {
-        const enrollmentsResults = await insertEnrollment({
-          enrollments: newEnrollments
-        });
-        processResponse(enrollmentsResults, 'Enrollment');
-      }
-    } catch (e) {
-      processResponse(e, 'Enrollment');
+  try {
+    if (newEnrollments.length > 0) {
+      const enrollmentsResults = await insertEnrollment({
+        enrollments: newEnrollments
+      });
+      processResponse(enrollmentsResults, 'Enrollment');
     }
+  } catch (e) {
+    processResponse(e, 'Enrollment');
+  }
 
   try {
     if (allEvents.length > 0) {
@@ -994,7 +984,6 @@ const pullMapping = async (minimum) => {
         events: allEvents
       });
       processResponse(eventsResults, 'Event');
-    // console.log(allEvents);
     }
   } catch (e) {
     processResponse(e, 'Event');
@@ -1003,9 +992,7 @@ const pullMapping = async (minimum) => {
      winston.log('error', JSON.stringify(e));
  }*/
 };
-
 // pullMapping(args, minimum);
-
 if (schedule) {
   setInterval(async () => {
     // const reachable = await isReachable(url);
@@ -1023,15 +1010,6 @@ if (schedule) {
   //     winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
   // }
   }, scheduleTime * 1000);
-/*const job = scheduler.scheduleJob('*!/' + scheduleTime + ' * * * * *', async () => {
-    // const reachable = await isReachable(url);
-    // if (reachable) {
-    await pullMapping(minimum);
-    minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
-    // } else {
-    //     winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
-    // }
-});*/
 } else {
   // isReachable(url).then(async reachable => {
   //     if (reachable) {
@@ -1041,7 +1019,6 @@ if (schedule) {
   //         winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
   //     }
   // });
-
 
   (async () => {
     await pullMapping(minimum);
