@@ -949,6 +949,8 @@ const pullMapping = async (minimum) => {
   const foundEntities = await searchTrackedEntities(uniqueIds);
   const processed = processData(data, foundEntities);
 
+  console.log(processed)
+
   // Inserting
 
   const {newTrackedEntityInstances, newEnrollments, newEvents, trackedEntityInstancesUpdate, eventsUpdate} = processed;
@@ -986,6 +988,7 @@ const pullMapping = async (minimum) => {
       processResponse(eventsResults, 'Event');
     }
   } catch (e) {
+    console(JSON.stringify(e));
     processResponse(e, 'Event');
   }
 /* } catch (e) {
