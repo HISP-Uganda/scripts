@@ -7,15 +7,12 @@ const fs = require("fs");
 const URL = require('url').URL;
 const isReachable = require('is-reachable');
 const winston = require('./winston');
-const scheduler = require('node-schedule');
-
 const mapping = require('./mapping.json');
+const readConfig = require('read-config');
+
 mapping.dataSource = 3;
 
-
-let {username, password, url, schedule, scheduleTime, dataType, dataUsername, dataPassword, dataURL, queryFile, minimum} = require('./options');
-
-
+let {username, password, url, schedule, scheduleTime, dataType, dataUsername, dataPassword, dataURL, queryFile, minimum} = readConfig('./options.json');
 const dhis2 = new URL(url);
 
 dhis2.username = username;
@@ -143,12 +140,6 @@ const searchTrackedEntities = async (uniqueIds) => {
       json: true
     });
   });
-
-  // await Promise.all(all.map(async (response) => {
-  //   const data = await response;
-  //   const entities = data['trackedEntityInstances'];
-  //   foundEntities = [...foundEntities, ...entities];
-  // }));
 
   const responses = await Promise.all(all);
 
@@ -807,7 +798,6 @@ const processData = (data, foundEntities) => {
       }
     });
   }
-
   return {
     newTrackedEntityInstances,
     newEnrollments,
@@ -878,7 +868,6 @@ const insertEvent = (data) => {
   return rq(options);
 };
 
-
 const pullMapping = async (minimum) => {
   // try {
   let data = null;
@@ -887,31 +876,35 @@ const pullMapping = async (minimum) => {
       case 'mysql':
         if (queryFile && fileExists(queryFile)) {
           const sql = fs.readFileSync(queryFile).toString();
-          const found = await readMysql(dataURL, sql, [minimum, moment(new Date()).format('YYYY-MM-DD HH:mm:ss')]);
-          // Specific data processing for Micro Biology
-          let result = [];
-          const results = _.groupBy(found, 'registration_number');
-          var patientData = {};
-          _.forOwn(results, (v, k) => {
-            let i = 1;
-            var data = _.groupBy(v, 'organism');
-            patientData['New Patient UID'] = v[0]['registration_number'];
-            patientData['department'] = v[0]['department'];
-            patientData['event_date'] = v[0]['event_date'];
+          try {
+            const found = await readMysql(dataURL, sql, [minimum, moment().format('YYYY-MM-DD HH:mm:ss')]);
+            // Specific data processing for Micro Biology
+            let result = [];
+            const results = _.groupBy(found, 'registration_number');
+            var patientData = {};
+            _.forOwn(results, (v, k) => {
+              let i = 1;
+              var data = _.groupBy(v, 'organism');
+              patientData['New Patient UID'] = v[0]['registration_number'];
+              patientData['department'] = v[0]['department'];
+              patientData['event_date'] = v[0]['event_date'];
 
-            _.forOwn(data, (v, k) => {
-              patientData['Organism' + i] = k;
-              var j = 1;
-              _.forEach(v, function(r) {
-                patientData['Organism' + i + ' Antibiotics' + j] = r['antibiotic'];
-                patientData['Organism' + i + 'Antibiotics' + j + 'Result' + j] = r['result'];
-                j = j + 1;
+              _.forOwn(data, (v, k) => {
+                patientData['Organism' + i] = k;
+                var j = 1;
+                _.forEach(v, function(r) {
+                  patientData['Organism' + i + ' Antibiotics' + j] = r['antibiotic'];
+                  patientData['Organism' + i + 'Antibiotics' + j + 'Result' + j] = r['result'];
+                  j = j + 1;
+                });
+                i = i + 1
               });
-              i = i + 1
+              result.push(patientData);
             });
-            result.push(patientData);
-          });
-          data = result;
+            data = result;
+          } catch (e) {
+            winston.log('error', 'Mysql not found or query not OK');
+          }
         } else {
           winston.log('error', 'Mysql query file not found');
         }
@@ -987,42 +980,22 @@ const pullMapping = async (minimum) => {
   if (data) {
     const processed = processData(data, foundEntities);
     // Inserting
-    const {newTrackedEntityInstances, newEnrollments, newEvents, trackedEntityInstancesUpdate, eventsUpdate} = processed;
-
-    const allInstances = [...newTrackedEntityInstances, ...trackedEntityInstancesUpdate];
-    const allEvents = [...newEvents, ...eventsUpdate];
-
-
-    try {
-      if (allInstances.length > 0) {
-        const instancesResults = await insertTrackedEntityInstance({
-          trackedEntityInstances: allInstances
-        });
-        processResponse(instancesResults, 'Tracked entity instance');
-      }
-    } catch (e) {
-      processResponse(e, 'Tracked entity instance');
-    }
+    const {eventsUpdate} = processed;
+    const all = eventsUpdate.map(event => {
+      const options = {
+        method: 'PUT',
+        uri: EVENT_URL + '/' + event['event'],
+        body: event,
+        json: true
+      };
+      return rq(options);
+    });
 
     try {
-      if (newEnrollments.length > 0) {
-        const enrollmentsResults = await insertEnrollment({
-          enrollments: newEnrollments
-        });
-        processResponse(enrollmentsResults, 'Enrollment');
-      }
-    } catch (e) {
-      processResponse(e, 'Enrollment');
-    }
-
-    try {
-      if (allEvents.length > 0) {
-        const eventsResults = await insertEvent({
-          events: allEvents
-        });
-        processResponse(eventsResults, 'Event');
-      // console.log(allEvents);
-      }
+      const eventsResults = await Promise.all(all);
+      eventsResults.forEach(result => {
+        processResponse(result, 'Event');
+      });
     } catch (e) {
       console.log(JSON.stringify(e));
       processResponse(e, 'Event');
@@ -1034,25 +1007,34 @@ const pullMapping = async (minimum) => {
 
 if (schedule) {
   setInterval(async () => {
-    // const reachable = await isReachable(url);
-    // if (reachable) {
-    if (running) {
-      return;
-    } else {
-      running = true;
-      await pullMapping(minimum);
-      minimum = moment(new Date()).format('YYYY-MM-DD HH:mm:ss')
-      running = false;
-    }
+    const reachable = await isReachable(url, {
+      timeout: 15000
+    });
+    if (reachable) {
+      if (running) {
+        return;
+      } else {
+        running = true;
+        await pullMapping(minimum);
+        minimum = moment().format('YYYY-MM-DD HH:mm:ss')
+        running = false;
+      }
 
-  // } else {
-  //     winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
-  // }
+    } else {
+      winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
+    }
   }, scheduleTime * 1000);
 } else {
   (async () => {
-    await pullMapping(minimum);
-    winston.log('info', 'Importing complete');
+    const reachable = await isReachable(url, {
+      timeout: 15000
+    });
+    if (reachable) {
+      await pullMapping(minimum);
+      winston.log('info', 'Importing complete');
+    } else {
+      winston.log('error', 'DHIS2 not reachable verify your DHIS2 server is reachable and that your dhis2 url is valid');
+    }
   })();
 
 }
