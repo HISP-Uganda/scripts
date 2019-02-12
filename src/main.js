@@ -598,7 +598,8 @@ const processData = (data, foundEntities) => {
                     const type = a.valueType;
                     const optionsSet = a.trackedEntityAttribute.optionSet;
                     const validatedValue = validateValue(type, value, optionsSet);
-
+                    const row = client.client;
+                    const column = e.column.value;
                     if (value !== '' && validatedValue !== null) {
                         attributes = [...attributes, {
                             attribute: a.trackedEntityAttribute.id,
