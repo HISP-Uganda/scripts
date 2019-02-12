@@ -1013,9 +1013,9 @@ const pullMapping = async (minimum) => {
                     json: true
                 });
 
-                data = data.map(d => {
-                    return _.pickBy(d, _.identity);
-                });
+                // data = data.map(d => {
+                //     return _.pickBy(d, _.identity);
+                // });
             } else {
                 winston.log('error', 'Url specified in the mapping not reachable');
             }
